@@ -5,6 +5,7 @@ import { z } from "zod";
 import { prisma } from "./db/prisma.js";
 import { BookkeepingBot } from "./domain/bot.js";
 import { BookkeepingStore } from "./domain/store.js";
+import { createWhatsAppClientFromEnv, WhatsAppConfigError } from "./whatsapp/client.js";
 
 const simulateBodySchema = z.object({
   from: z.string().min(1),
@@ -13,6 +14,7 @@ const simulateBodySchema = z.object({
 
 const store = new BookkeepingStore(prisma);
 const bot = new BookkeepingBot(store);
+const whatsapp = createWhatsAppClientFromEnv();
 
 export function createApp() {
   const app = express();
@@ -22,7 +24,11 @@ export function createApp() {
   app.use(express.json());
 
   app.get("/health", (_request, response) => {
-    response.json({ ok: true, service: "whatsapp-bookkeeper" });
+    response.json({
+      ok: true,
+      service: "whatsapp-bookkeeper",
+      whatsappConfigured: whatsapp.isConfigured(),
+    });
   });
 
   app.post("/simulate", async (request, response, next) => {
@@ -54,7 +60,7 @@ export function createApp() {
 
       for (const message of messages) {
         const result = await bot.handleMessage(message.from, message.text);
-        console.log("WhatsApp reply pending", { to: message.from, text: result.text });
+        await sendWhatsAppReply(message.from, result.text);
       }
 
       response.sendStatus(200);
@@ -79,6 +85,19 @@ export function createApp() {
   });
 
   return app;
+}
+
+async function sendWhatsAppReply(to: string, text: string): Promise<void> {
+  try {
+    await whatsapp.sendTextMessage({ to, text });
+  } catch (error) {
+    if (error instanceof WhatsAppConfigError) {
+      console.warn("WhatsApp reply skipped", { to, reason: error.message, text });
+      return;
+    }
+
+    throw error;
+  }
 }
 
 function extractWhatsAppMessages(payload: unknown): Array<{ from: string; text: string }> {
