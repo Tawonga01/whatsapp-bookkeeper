@@ -21,25 +21,37 @@ async function main() {
     create: { shopId: shop.id, name: "mary", normalizedName: "mary" },
   });
 
-  await prisma.sale.create({
-    data: {
-      shopId: shop.id,
-      itemId: item.id,
-      customerId: customer.id,
-      kind: "credit",
-      quantity: 1,
-      amount: 1200,
-      dueDateText: "today",
-    },
+  const existingDemoSale = await prisma.sale.findFirst({
+    where: { shopId: shop.id, itemId: item.id, customerId: customer.id, amount: 1200, dueDateText: "today" },
   });
 
-  await prisma.payment.create({
-    data: {
-      shopId: shop.id,
-      customerId: customer.id,
-      amount: 500,
-    },
+  if (!existingDemoSale) {
+    await prisma.sale.create({
+      data: {
+        shopId: shop.id,
+        itemId: item.id,
+        customerId: customer.id,
+        kind: "credit",
+        quantity: 1,
+        amount: 1200,
+        dueDateText: "today",
+      },
+    });
+  }
+
+  const existingDemoPayment = await prisma.payment.findFirst({
+    where: { shopId: shop.id, customerId: customer.id, amount: 500 },
   });
+
+  if (!existingDemoPayment) {
+    await prisma.payment.create({
+      data: {
+        shopId: shop.id,
+        customerId: customer.id,
+        amount: 500,
+      },
+    });
+  }
 }
 
 main()
