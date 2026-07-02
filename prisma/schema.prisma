@@ -14,7 +14,7 @@ enum SaleKind {
 
 model Shop {
   id          String   @id @default(uuid())
-  name        String
+  name        String   @unique
   phoneNumber String?  @unique
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
