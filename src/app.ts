@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import { z } from "zod";
+import { prisma } from "./db/prisma.js";
 import { BookkeepingBot } from "./domain/bot.js";
 import { BookkeepingStore } from "./domain/store.js";
 
@@ -10,7 +11,7 @@ const simulateBodySchema = z.object({
   text: z.string().min(1),
 });
 
-const store = new BookkeepingStore();
+const store = new BookkeepingStore(prisma);
 const bot = new BookkeepingBot(store);
 
 export function createApp() {
@@ -24,10 +25,14 @@ export function createApp() {
     response.json({ ok: true, service: "whatsapp-bookkeeper" });
   });
 
-  app.post("/simulate", (request, response) => {
-    const body = simulateBodySchema.parse(request.body);
-    const result = bot.handleMessage(body.from, body.text);
-    response.json(result);
+  app.post("/simulate", async (request, response, next) => {
+    try {
+      const body = simulateBodySchema.parse(request.body);
+      const result = await bot.handleMessage(body.from, body.text);
+      response.json(result);
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.get("/whatsapp/webhook", (request, response) => {
@@ -43,24 +48,34 @@ export function createApp() {
     response.sendStatus(403);
   });
 
-  app.post("/whatsapp/webhook", (request, response) => {
-    const messages = extractWhatsAppMessages(request.body);
+  app.post("/whatsapp/webhook", async (request, response, next) => {
+    try {
+      const messages = extractWhatsAppMessages(request.body);
 
-    for (const message of messages) {
-      const result = bot.handleMessage(message.from, message.text);
-      console.log("WhatsApp reply pending", { to: message.from, text: result.text });
+      for (const message of messages) {
+        const result = await bot.handleMessage(message.from, message.text);
+        console.log("WhatsApp reply pending", { to: message.from, text: result.text });
+      }
+
+      response.sendStatus(200);
+    } catch (error) {
+      next(error);
     }
-
-    response.sendStatus(200);
   });
 
-  app.get("/records", (_request, response) => {
-    response.json({
-      sales: store.listSales(),
-      payments: store.listPayments(),
-      debtors: store.debtorBalances(),
-      summary: store.summary(),
-    });
+  app.get("/records", async (_request, response, next) => {
+    try {
+      const [sales, payments, debtors, summary] = await Promise.all([
+        store.listSales(),
+        store.listPayments(),
+        store.debtorBalances(),
+        store.summary(),
+      ]);
+
+      response.json({ sales, payments, debtors, summary });
+    } catch (error) {
+      next(error);
+    }
   });
 
   return app;
