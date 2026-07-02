@@ -96,7 +96,7 @@ async function sendWhatsAppReply(to: string, text: string): Promise<void> {
       return;
     }
 
-    throw error;
+    console.error("WhatsApp reply failed", { to, error, text });
   }
 }
 
