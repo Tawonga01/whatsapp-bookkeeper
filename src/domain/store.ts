@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Payment, Sale, SaleDraft } from "./types.js";
 
 export type DebtorBalance = {
@@ -26,7 +27,7 @@ export class BookkeepingStore {
 
     const sale: Sale = {
       ...draft,
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       createdAt: new Date().toISOString(),
     };
 
@@ -37,7 +38,7 @@ export class BookkeepingStore {
 
   recordPayment(customer: string, amount: number): Payment {
     const payment: Payment = {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       customer,
       amount,
       createdAt: new Date().toISOString(),
