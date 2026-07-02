@@ -42,13 +42,14 @@ This scaffold includes:
 - local message simulator endpoint
 - WhatsApp webhook verification endpoint
 - WhatsApp inbound message receiver shape
+- WhatsApp Cloud API text replies
 - template command parser
 - confirmation flow
 - PostgreSQL-backed sales, payments, customers, items, shops, and pending confirmations
 - debtor and summary responses
 - email report stub
 
-Actual WhatsApp reply sending, scheduled jobs, and email delivery are next.
+Scheduled jobs and email delivery are next.
 
 ## Local Run
 
@@ -93,3 +94,5 @@ Check stored records:
 ```bash
 curl http://localhost:3000/records
 ```
+
+For real WhatsApp replies, set `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, and the public webhook URL in Meta's WhatsApp Cloud API settings.
