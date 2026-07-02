@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SaleKind {
+  cash
+  credit
+}
+
+model Shop {
+  id          String   @id @default(uuid())
+  name        String
+  phoneNumber String?  @unique
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  customers    Customer[]
+  items        Item[]
+  sales        Sale[]
+  payments     Payment[]
+  pendingSales PendingSale[]
+}
+
+model Customer {
+  id             String   @id @default(uuid())
+  shopId         String
+  name           String
+  normalizedName String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  shop     Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  sales    Sale[]
+  payments Payment[]
+
+  @@unique([shopId, normalizedName])
+  @@index([shopId])
+}
+
+model Item {
+  id             String   @id @default(uuid())
+  shopId         String
+  name           String
+  normalizedName String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  shop  Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  sales Sale[]
+
+  @@unique([shopId, normalizedName])
+  @@index([shopId])
+}
+
+model Sale {
+  id          String   @id @default(uuid())
+  shopId      String
+  itemId      String
+  customerId  String?
+  kind        SaleKind
+  quantity    Decimal  @db.Decimal(12, 2)
+  amount      Decimal  @db.Decimal(12, 2)
+  dueDateText String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  shop     Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  item     Item      @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([shopId, createdAt])
+  @@index([shopId, kind])
+  @@index([customerId])
+}
+
+model Payment {
+  id         String   @id @default(uuid())
+  shopId     String
+  customerId String
+  amount     Decimal  @db.Decimal(12, 2)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  shop     Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([shopId, createdAt])
+  @@index([customerId])
+}
+
+model PendingSale {
+  id          String   @id @default(uuid())
+  shopId      String
+  senderId    String   @unique
+  kind        SaleKind
+  item        String
+  quantity    Decimal  @db.Decimal(12, 2)
+  amount      Decimal  @db.Decimal(12, 2)
+  customer    String?
+  dueDateText String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId])
+}
