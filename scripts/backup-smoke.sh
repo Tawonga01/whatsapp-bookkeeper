@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
+psql() { command psql --dbname="$PGDATABASE" "$@"; }
 work=$(mktemp -d /tmp/musika-smoke.XXXXXXXX)
 trap 'case "$work" in /tmp/musika-smoke.*) rm -rf -- "$work" ;; esac' EXIT
 export PGDATABASE='postgresql://postgres:restore-test-only@restore:5432/postgres'

@@ -2,6 +2,7 @@
 # PostgreSQL 18 clients and age are required. Never run with shell tracing.
 set -euo pipefail
 umask 077
+psql() { command psql --dbname="$PGDATABASE" "$@"; }
 : "${BACKUP_DATABASE_URL:?Set the direct source connection privately}"
 : "${AGE_RECIPIENT:?Set the public age recipient}"
 : "${RESTORE_TEST_URL:?Set the disposable restore connection}"
@@ -23,7 +24,7 @@ trap cleanup EXIT
 export PGCONNECT_TIMEOUT=30
 export PGDATABASE="$BACKUP_DATABASE_URL"
 export PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=300000'
-if ! pg_dump --format=custom --no-owner --no-acl --file="$work/database.dump" 2>"$work/dump-errors"; then
+if ! pg_dump --dbname="$BACKUP_DATABASE_URL" --format=custom --no-owner --no-acl --file="$work/database.dump" 2>"$work/dump-errors"; then
   echo 'Database export failed; private diagnostic output was not published.' >&2; exit 1
 fi
 test -s "$work/database.dump"
