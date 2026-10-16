@@ -1,0 +1,47 @@
+name: Encrypted database backup
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 1 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: musika-database-backup
+  cancel-in-progress: false
+jobs:
+  backup:
+    if: vars.BACKUPS_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container: postgres:18-bookworm
+    services:
+      restore:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_PASSWORD: restore-test-only
+          POSTGRES_DB: musika_restore
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install encryption tool
+        run: apt-get update -qq && apt-get install -y --no-install-recommends age
+      - name: Export, verify isolated recovery and encrypt
+        shell: bash
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          AGE_RECIPIENT: ${{ vars.BACKUP_AGE_RECIPIENT }}
+          RESTORE_TEST_URL: postgresql://postgres:restore-test-only@restore:5432/musika_restore
+        run: bash scripts/backup.sh "$RUNNER_TEMP/encrypted-backup"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: encrypted-database-${{ github.run_id }}
+          path: ${{ runner.temp }}/encrypted-backup/*.dump.age
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

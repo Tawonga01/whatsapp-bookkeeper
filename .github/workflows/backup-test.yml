@@ -1,0 +1,31 @@
+name: Backup recovery test
+on:
+  workflow_dispatch:
+  push:
+    paths: ['scripts/backup*.sh', '.github/workflows/backup*.yml']
+permissions:
+  contents: read
+jobs:
+  recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container: postgres:18-bookworm
+    services:
+      restore:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_PASSWORD: restore-test-only
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install encryption tool
+        run: apt-get update -qq && apt-get install -y --no-install-recommends age
+      - name: Test export, encryption and disposable recovery
+        shell: bash
+        run: bash scripts/backup-smoke.sh
