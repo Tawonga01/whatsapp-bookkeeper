@@ -36,6 +36,15 @@ test(
       onLog: () => {},
       onError: () => {},
     });
+    // Use PostgreSQL's own lifecycle controller. The embedded helper force-kills
+    // Windows processes, which can race a restart and leave inherited log pipes open.
+    const platform = process.platform === "win32" ? "windows" : process.platform;
+    const { pg_ctl: pgCtl } = await import(`@embedded-postgres/${platform}-${process.arch}`);
+    const startDatabase = () => execFileSync(pgCtl, ["-D", join(directory, "db"),
+      "-l", join(directory, "postgres.log"), "-o", `-h 127.0.0.1 -p ${port}`, "-w", "start"],
+      { stdio: "ignore", windowsHide: true, timeout: 60_000 });
+    const stopDatabase = () => execFileSync(pgCtl, ["-D", join(directory, "db"),
+      "-m", "fast", "-w", "stop"], { stdio: "ignore", windowsHide: true, timeout: 60_000 });
     const url = `postgresql://postgres:${password}@127.0.0.1:${port}/musika_test?schema=public`;
     const db = new PrismaClient({ datasources: { db: { url } } });
     const service = new AccountingService(
@@ -56,9 +65,15 @@ test(
     let started = false;
     try {
       await pg.initialise();
-      await pg.start();
+      startDatabase();
       started = true;
-      await pg.createDatabase("musika_test");
+      const bootstrap = pg.getPgClient();
+      try {
+        await bootstrap.connect();
+        await bootstrap.query("CREATE DATABASE musika_test");
+      } finally {
+        await bootstrap.end();
+      }
       // Start on the prior schema and insert real legacy records before the additive upgrade.
       cli(
         "db",
@@ -405,9 +420,9 @@ test(
         const receipt = await db.inboundMessage.findUniqueOrThrow({ where: { id: "process-restart-confirm" } });
         assert.equal(receipt.response, null);
         await db.$disconnect();
-        await pg.stop();
+        stopDatabase();
         started = false;
-        await pg.start();
+        startDatabase();
         started = true;
         await db.$connect();
         child("save");
@@ -422,7 +437,7 @@ test(
       });
     } finally {
       await db.$disconnect();
-      if (started) await pg.stop();
+      if (started) stopDatabase();
       // This exact temporary directory was created above. Retry Windows file-lock release after shutdown.
       await rm(directory, {
         recursive: true,
