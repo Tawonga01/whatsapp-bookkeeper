@@ -397,6 +397,29 @@ test(
           );
         },
       );
+      await t.test("separate processes and a PostgreSQL restart recover queued confirmation and unsent acknowledgement exactly once", async () => {
+        const child = (phase: string) => execFileSync(process.execPath,
+          ["--import", "tsx", "tests/fixtures/restart-worker.ts", phase],
+          { env: { ...process.env, DATABASE_URL: url }, encoding: "utf8", windowsHide: true });
+        child("draft");
+        const receipt = await db.inboundMessage.findUniqueOrThrow({ where: { id: "process-restart-confirm" } });
+        assert.equal(receipt.response, null);
+        await db.$disconnect();
+        await pg.stop();
+        started = false;
+        await pg.start();
+        started = true;
+        await db.$connect();
+        child("save");
+        const afterSave = await db.inboundMessage.findUniqueOrThrow({ where: { id: "process-restart-confirm" } });
+        assert.equal((afterSave.response as any).text, "Transaction saved.");
+        assert.equal(afterSave.deliveredAt, null);
+        assert.equal((await service.records("263770000009")).transactions.length, 1);
+        assert.equal(JSON.parse(child("deliver")).acknowledgements, 1);
+        child("save");
+        assert.equal(JSON.parse(child("deliver")).acknowledgements, 0);
+        assert.equal((await service.records("263770000009")).transactions.length, 1);
+      });
     } finally {
       await db.$disconnect();
       if (started) await pg.stop();

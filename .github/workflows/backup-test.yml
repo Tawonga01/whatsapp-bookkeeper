@@ -2,7 +2,7 @@ name: Backup recovery test
 on:
   workflow_dispatch:
   push:
-    paths: ['scripts/backup*.sh', '.github/workflows/backup*.yml']
+    paths: ['scripts/backup*.sh', 'scripts/provision-backup-role.sh', '.github/workflows/backup*.yml', '.github/workflows/provision-backup-role.yml']
 permissions:
   contents: read
 jobs:
@@ -28,4 +28,4 @@ jobs:
         run: apt-get update -qq && apt-get install -y --no-install-recommends age
       - name: Test export, encryption and disposable recovery
         shell: bash
-        run: bash scripts/backup-smoke.sh
+        run: bash scripts/backup-role-test.sh

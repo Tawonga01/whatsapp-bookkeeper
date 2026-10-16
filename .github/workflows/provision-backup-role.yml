@@ -1,0 +1,31 @@
+name: Provision read-only backup login
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: musika-backup-role-setup
+  cancel-in-progress: false
+jobs:
+  provision:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    container: postgres:18-bookworm
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: apt-get update -qq && apt-get install -y --no-install-recommends age
+      - name: Create restricted login and encrypt connection details
+        shell: bash
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          AGE_RECIPIENT: ${{ vars.BACKUP_AGE_RECIPIENT }}
+        run: bash scripts/provision-backup-role.sh "$RUNNER_TEMP/backup-login"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: encrypted-backup-login
+          path: ${{ runner.temp }}/backup-login/backup-login.age
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
