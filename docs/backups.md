@@ -1,5 +1,16 @@
 # MUSIKA backup and recovery
 
+## Verified 16 October 2026
+
+- Synthetic recovery test passed: https://github.com/Tawonga01/whatsapp-bookkeeper/actions/runs/38937024090
+- First live Neon export, isolated PostgreSQL restore and encrypted artifact passed (attempt 2): https://github.com/Tawonga01/whatsapp-bookkeeper/actions/runs/38937241989
+- Downloaded encrypted artifact was decrypted successfully with the local owner key; the PostgreSQL custom-archive header was verified. Temporary plaintext was removed. Encrypted copy is retained in `C:\Users\Tawonga\.codex\musika-recovery\first-verified-backup`.
+- Local key round-trip and Windows directory/file ACLs were verified. Private key was not uploaded.
+- `BACKUPS_ENABLED=true`, direct connection secret and public recipient are configured.
+- GitHub account Actions notification setting was checked: Email, Failed workflows only. Actual email delivery was not independently verified.
+- No real vendor transactions were added or changed. WhatsApp remains disabled.
+- Owner still needs an offline/password-manager copy of the recovery key; dedicated read-only backup credentials remain a pre-pilot task.
+
 ## Policy
 
 - GitHub Actions `Encrypted database backup`: daily at 01:23 UTC (03:23 Zimbabwe; Berlin 03:23 summer / 02:23 winter). Scheduling is best-effort, not a guarantee.
