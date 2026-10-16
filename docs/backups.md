@@ -11,6 +11,16 @@
 - No real vendor transactions were added or changed. WhatsApp remains disabled.
 - Owner still needs an offline/password-manager copy of the recovery key; dedicated read-only backup credentials remain a pre-pilot task.
 
+## Read-only access rollout (16 October 2026)
+
+- Permission/export test passed: https://github.com/Tawonga01/whatsapp-bookkeeper/actions/runs/38939285607
+- Dedicated `musika_backup_reader` login created and read-verified in Neon: https://github.com/Tawonga01/whatsapp-bookkeeper/actions/runs/38939548360
+- It is not a superuser, database/role creator, replication or RLS-bypass role. It receives public-schema USAGE, table SELECT and sequence SELECT, plus future-table/sequence SELECT for objects created by the provisioning owner. It owns no application records and is not given INSERT/UPDATE/DELETE/DDL privileges. Other migration owners need their own corresponding default grants.
+- Permission tests disable its default read-only session setting before checking denial of writes/DDL, and perform an actual export/restore as the reader.
+- Login credentials are stored only in an age-encrypted artifact and an encrypted local copy under `C:\Users\Tawonga\.codex\musika-recovery\read-only-login`. Setup refuses to reset an existing role/password.
+- **Cutover not completed:** the original local recovery-key path is now missing. Owner must supply its new location (not its contents). GitHub's existing backup secret and Render's application connection are unchanged. Do not claim nightly jobs use the reader until the secret is replaced and a live export/restore passes.
+- Do not generate a replacement recovery key silently: it cannot decrypt existing backups or the encrypted reader-login artifact.
+
 ## Policy
 
 - GitHub Actions `Encrypted database backup`: daily at 01:23 UTC (03:23 Zimbabwe; Berlin 03:23 summer / 02:23 winter). Scheduling is best-effort, not a guarantee.
