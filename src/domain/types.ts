@@ -23,7 +23,32 @@ export type Payment = {
 
 export type BotResponse = {
   text: string;
-  saved?: Sale | Payment;
+  saved?: Sale | Payment | Expense | import("./transactions.js").LedgerEvent;
+  transactionId?: string;
+  choices?: Array<{ id: string; title: string }>;
+  buttons?: Array<{ id: string; title: string }>;
+};
+
+export type Expense = {
+  id: string;
+  description: string;
+  amount: number;
+  createdAt: string;
+};
+export type Entry = {
+  type: "cash" | "credit" | "payment" | "expense";
+  item?: string;
+  quantity?: number;
+  amount?: number;
+  customer?: string;
+  dueDate?: string;
+  description?: string;
+};
+export type ConversationState = {
+  entry: Entry;
+  index: number;
+  token: string;
+  updatedAt: string;
 };
 
 export type ParsedCommand =

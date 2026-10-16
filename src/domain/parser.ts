@@ -28,7 +28,7 @@ export function parseCommand(input: string): ParsedCommand {
 }
 
 function parseCash(parts: string[]): ParsedCommand {
-  if (parts.length < 4) {
+  if (parts.length < 4 || parts.length > 5) {
     throw new ParseError("Use: cash <item> <quantity> <amount> [customer]");
   }
 

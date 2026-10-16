@@ -1,122 +1,145 @@
-import cors from "cors";
+import { timingSafeEqual } from "node:crypto";
 import express from "express";
 import helmet from "helmet";
 import { z } from "zod";
-import { prisma } from "./db/prisma.js";
-import { BookkeepingBot } from "./domain/bot.js";
-import { BookkeepingStore } from "./domain/store.js";
-import { createWhatsAppClientFromEnv, WhatsAppConfigError } from "./whatsapp/client.js";
+import {
+  extractMessages,
+  verifySignature,
+  type IncomingMessage,
+} from "./whatsapp/webhook.js";
+import type { BotResponse } from "./domain/types.js";
+import type { MessageContext } from "./domain/transactions.js";
 
-const simulateBodySchema = z.object({
-  from: z.string().min(1),
-  text: z.string().min(1),
+export interface AppService {
+  enqueue(messages: IncomingMessage[]): Promise<void>;
+  simulate(
+    sender: string,
+    text: string,
+    context?: MessageContext,
+  ): Promise<BotResponse>;
+  records(sender: string): Promise<unknown>;
+}
+export type AppConfig = {
+  verifyToken?: string;
+  appSecret?: string;
+  phoneNumberId?: string;
+  apiKey?: string;
+  enableDevApi?: boolean;
+  whatsappConfigured?: boolean;
+};
+const bodySchema = z.object({
+  from: z.string().min(1).max(100),
+  text: z.string().trim().min(1).max(4096),
+  replyTo: z.string().min(1).max(250).optional(),
 });
-
-const store = new BookkeepingStore(prisma);
-const bot = new BookkeepingBot(store);
-const whatsapp = createWhatsAppClientFromEnv();
-
-export function createApp() {
+export function createApp(service: AppService, config: AppConfig = {}) {
   const app = express();
-
   app.use(helmet());
-  app.use(cors());
-  app.use(express.json());
-
-  app.get("/health", (_request, response) => {
-    response.json({
+  app.get("/health", (_req, res) => {
+    res.json({
       ok: true,
-      service: "whatsapp-bookkeeper",
-      whatsappConfigured: whatsapp.isConfigured(),
+      service: "musika-accountant",
+      whatsappConfigured: !!config.whatsappConfigured,
     });
   });
-
-  app.post("/simulate", async (request, response, next) => {
-    try {
-      const body = simulateBodySchema.parse(request.body);
-      const result = await bot.handleMessage(body.from, body.text);
-      response.json(result);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.get("/whatsapp/webhook", (request, response) => {
-    const mode = request.query["hub.mode"];
-    const token = request.query["hub.verify_token"];
-    const challenge = request.query["hub.challenge"];
-
-    if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
-      response.status(200).send(challenge);
+  app.get("/whatsapp/webhook", (req, res) => {
+    if (
+      config.verifyToken &&
+      req.query["hub.mode"] === "subscribe" &&
+      req.query["hub.verify_token"] === config.verifyToken &&
+      typeof req.query["hub.challenge"] === "string"
+    ) {
+      res.status(200).type("text/plain").send(req.query["hub.challenge"]);
       return;
     }
-
-    response.sendStatus(403);
+    res.sendStatus(403);
   });
-
-  app.post("/whatsapp/webhook", async (request, response, next) => {
-    try {
-      const messages = extractWhatsAppMessages(request.body);
-
-      for (const message of messages) {
-        const result = await bot.handleMessage(message.from, message.text);
-        await sendWhatsAppReply(message.from, result.text);
+  app.post(
+    "/whatsapp/webhook",
+    express.raw({ type: "application/json", limit: "1mb" }),
+    async (req, res, next) => {
+      if (!config.appSecret || !config.phoneNumberId) {
+        res.sendStatus(503);
+        return;
       }
-
-      response.sendStatus(200);
-    } catch (error) {
-      next(error);
-    }
+      if (
+        !Buffer.isBuffer(req.body) ||
+        !verifySignature(
+          req.body,
+          req.get("x-hub-signature-256"),
+          config.appSecret,
+        )
+      ) {
+        res.sendStatus(401);
+        return;
+      }
+      try {
+        const messages = extractMessages(
+          JSON.parse(req.body.toString("utf8")),
+          config.phoneNumberId,
+        );
+        await service.enqueue(messages); // Acknowledge only after durable receipt.
+        res.sendStatus(200);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+  if (config.enableDevApi) {
+    const auth: express.RequestHandler = (req, res, next) => {
+      const supplied = Buffer.from(req.get("authorization") ?? "");
+      const expected = Buffer.from("Bearer " + (config.apiKey ?? ""));
+      if (
+        !config.apiKey ||
+        supplied.length !== expected.length ||
+        !timingSafeEqual(supplied, expected)
+      ) {
+        res.sendStatus(401);
+        return;
+      }
+      next();
+    };
+    app.post(
+      "/simulate",
+      auth,
+      express.json({ limit: "16kb" }),
+      async (req, res, next) => {
+        try {
+          const b = bodySchema.parse(req.body);
+          res.json(
+            await service.simulate("sim:" + b.from, b.text, {
+              replyTo: b.replyTo,
+            }),
+          );
+        } catch (error) {
+          next(error);
+        }
+      },
+    );
+    app.get("/records", auth, async (req, res, next) => {
+      try {
+        const sender = z.string().min(1).max(120).parse(req.query.sender);
+        res.json(await service.records(sender));
+      } catch (error) {
+        next(error);
+      }
+    });
+  }
+  app.use((_req, res) => {
+    res.sendStatus(404);
   });
-
-  app.get("/records", async (_request, response, next) => {
-    try {
-      const [sales, payments, debtors, summary] = await Promise.all([
-        store.listSales(),
-        store.listPayments(),
-        store.debtorBalances(),
-        store.summary(),
-      ]);
-
-      response.json({ sales, payments, debtors, summary });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  return app;
-}
-
-async function sendWhatsAppReply(to: string, text: string): Promise<void> {
-  try {
-    await whatsapp.sendTextMessage({ to, text });
-  } catch (error) {
-    if (error instanceof WhatsAppConfigError) {
-      console.warn("WhatsApp reply skipped", { to, reason: error.message, text });
+  const errors: express.ErrorRequestHandler = (error, _req, res, _next) => {
+    if (error instanceof z.ZodError || error instanceof SyntaxError) {
+      res.status(400).json({ error: "Invalid request body or parameters." });
       return;
     }
-
-    console.error("WhatsApp reply failed", { to, error, text });
-  }
-}
-
-function extractWhatsAppMessages(payload: unknown): Array<{ from: string; text: string }> {
-  const value = payload as {
-    entry?: Array<{
-      changes?: Array<{
-        value?: {
-          messages?: Array<{
-            from?: string;
-            text?: { body?: string };
-          }>;
-        };
-      }>;
-    }>;
+    if (error?.type === "entity.too.large") {
+      res.sendStatus(413);
+      return;
+    }
+    console.error("Request could not be processed.");
+    res.status(500).json({ error: "Could not process request. Please retry." });
   };
-
-  return (value.entry ?? [])
-    .flatMap((entry) => entry.changes ?? [])
-    .flatMap((change) => change.value?.messages ?? [])
-    .filter((message) => message.from && message.text?.body)
-    .map((message) => ({ from: message.from!, text: message.text!.body! }));
+  app.use(errors);
+  return app;
 }

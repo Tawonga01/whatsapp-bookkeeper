@@ -1,285 +1,285 @@
-import { PrismaClient } from "@prisma/client";
-import { Payment, Sale, SaleDraft } from "./types.js";
+import { Prisma } from "@prisma/client";
+import { dueDate } from "./dates.js";
+import type { LedgerStore } from "./bot.js";
+import {
+  correctionAllowed,
+  replay,
+  TransactionError,
+  type ChatState,
+  type Correction,
+  type LedgerEvent,
+  type Transaction,
+} from "./transactions.js";
 
-export type DebtorBalance = {
-  customer: string;
-  creditTotal: number;
-  paidTotal: number;
-  balance: number;
-};
-
-export type Summary = {
-  cashSales: number;
-  creditSales: number;
-  paymentsReceived: number;
-  outstandingCredit: number;
-};
-
-export class BookkeepingStore {
+export class BookkeepingStore implements LedgerStore {
   constructor(
-    private readonly prisma: PrismaClient,
-    private readonly shopName = process.env.DEFAULT_SHOP_NAME ?? "Default Shop",
+    private readonly db: Prisma.TransactionClient,
+    private readonly sender: string,
+    private readonly currency = "USD",
   ) {}
-
-  async setPendingSale(senderId: string, draft: SaleDraft): Promise<void> {
-    const shop = await this.ensureShop();
-
-    await this.prisma.pendingSale.upsert({
-      where: { senderId },
-      create: {
-        shopId: shop.id,
-        senderId,
-        kind: draft.kind,
-        item: draft.item,
-        quantity: draft.quantity,
-        amount: draft.amount,
-        customer: draft.customer,
-        dueDateText: draft.dueDate,
-      },
-      update: {
-        shopId: shop.id,
-        kind: draft.kind,
-        item: draft.item,
-        quantity: draft.quantity,
-        amount: draft.amount,
-        customer: draft.customer,
-        dueDateText: draft.dueDate,
-      },
-    });
-  }
-
-  async clearPendingSale(senderId: string): Promise<boolean> {
-    const result = await this.prisma.pendingSale.deleteMany({ where: { senderId } });
-    return result.count > 0;
-  }
-
-  async confirmPendingSale(senderId: string): Promise<Sale | null> {
-    const pending = await this.prisma.pendingSale.findUnique({ where: { senderId } });
-    if (!pending) return null;
-
-    const shopId = pending.shopId;
-    const item = await this.ensureItem(shopId, pending.item);
-    const customer = pending.customer ? await this.ensureCustomer(shopId, pending.customer) : null;
-
-    const sale = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.sale.create({
-        data: {
-          shopId,
-          itemId: item.id,
-          customerId: customer?.id,
-          kind: pending.kind,
-          quantity: pending.quantity,
-          amount: pending.amount,
-          dueDateText: pending.dueDateText,
-        },
-        include: { item: true, customer: true },
-      });
-
-      await tx.pendingSale.delete({ where: { id: pending.id } });
-      return created;
-    });
-
-    return mapSale(sale);
-  }
-
-  async recordPayment(customerName: string, amount: number): Promise<Payment> {
-    const shop = await this.ensureShop();
-    const customer = await this.ensureCustomer(shop.id, customerName);
-
-    const payment = await this.prisma.payment.create({
-      data: {
-        shopId: shop.id,
-        customerId: customer.id,
-        amount,
-      },
-      include: { customer: true },
-    });
-
-    return mapPayment(payment);
-  }
-
-  async listSales(): Promise<Sale[]> {
-    const shop = await this.ensureShop();
-    const sales = await this.prisma.sale.findMany({
-      where: { shopId: shop.id },
-      include: { item: true, customer: true },
-      orderBy: { createdAt: "desc" },
-    });
-
-    return sales.map(mapSale);
-  }
-
-  async listPayments(): Promise<Payment[]> {
-    const shop = await this.ensureShop();
-    const payments = await this.prisma.payment.findMany({
-      where: { shopId: shop.id },
-      include: { customer: true },
-      orderBy: { createdAt: "desc" },
-    });
-
-    return payments.map(mapPayment);
-  }
-
-  async summary(): Promise<Summary> {
-    const shop = await this.ensureShop();
-    const [cashSales, creditSales, paymentsReceived] = await Promise.all([
-      this.sumSales(shop.id, "cash"),
-      this.sumSales(shop.id, "credit"),
-      this.sumPayments(shop.id),
-    ]);
-
-    return {
-      cashSales,
-      creditSales,
-      paymentsReceived,
-      outstandingCredit: Math.max(creditSales - paymentsReceived, 0),
-    };
-  }
-
-  async debtorBalances(): Promise<DebtorBalance[]> {
-    const shop = await this.ensureShop();
-    const [sales, payments] = await Promise.all([
-      this.prisma.sale.findMany({
-        where: { shopId: shop.id, kind: "credit", customerId: { not: null } },
-        include: { customer: true },
-      }),
-      this.prisma.payment.findMany({
-        where: { shopId: shop.id },
-        include: { customer: true },
-      }),
-    ]);
-
-    const balances = new Map<string, DebtorBalance>();
-
-    for (const sale of sales) {
-      if (!sale.customer) continue;
-      const customer = sale.customer.normalizedName;
-      const current = balances.get(customer) ?? { customer, creditTotal: 0, paidTotal: 0, balance: 0 };
-      const amount = Number(sale.amount);
-      current.creditTotal += amount;
-      current.balance += amount;
-      balances.set(customer, current);
-    }
-
-    for (const payment of payments) {
-      const customer = payment.customer.normalizedName;
-      const current = balances.get(customer) ?? { customer, creditTotal: 0, paidTotal: 0, balance: 0 };
-      const amount = Number(payment.amount);
-      current.paidTotal += amount;
-      current.balance -= amount;
-      balances.set(customer, current);
-    }
-
-    return [...balances.values()]
-      .filter((entry) => entry.balance > 0)
-      .sort((left, right) => right.balance - left.balance);
-  }
-
-  async dueToday(): Promise<Sale[]> {
-    const shop = await this.ensureShop();
-    const sales = await this.prisma.sale.findMany({
-      where: { shopId: shop.id, kind: "credit", dueDateText: { equals: "today", mode: "insensitive" } },
-      include: { item: true, customer: true },
-      orderBy: { createdAt: "desc" },
-    });
-
-    return sales.map(mapSale);
-  }
-
-  async overdue(): Promise<Sale[]> {
-    const shop = await this.ensureShop();
-    const sales = await this.prisma.sale.findMany({
-      where: { shopId: shop.id, kind: "credit", dueDateText: { equals: "overdue", mode: "insensitive" } },
-      include: { item: true, customer: true },
-      orderBy: { createdAt: "desc" },
-    });
-
-    return sales.map(mapSale);
-  }
-
-  private async ensureShop() {
-    return this.prisma.shop.upsert({
-      where: { name: this.shopName },
-      create: { name: this.shopName },
+  private shop() {
+    return this.db.shop.upsert({
+      where: { phoneNumber: this.sender },
+      create: { name: "WhatsApp " + this.sender, phoneNumber: this.sender },
       update: {},
     });
   }
-
-  private async ensureCustomer(shopId: string, name: string) {
-    const normalizedName = normalizeName(name);
-
-    return this.prisma.customer.upsert({
-      where: { shopId_normalizedName: { shopId, normalizedName } },
-      create: { shopId, name, normalizedName },
-      update: { name },
+  async getState(): Promise<ChatState | null> {
+    const row = await this.db.conversation.findUnique({
+      where: { senderId: this.sender },
+    });
+    return (row?.state as unknown as ChatState) ?? null;
+  }
+  async setState(state: ChatState | null) {
+    if (!state) {
+      await this.db.conversation.deleteMany({
+        where: { senderId: this.sender },
+      });
+      return;
+    }
+    const json = JSON.parse(JSON.stringify(state)) as Prisma.InputJsonValue;
+    await this.db.conversation.upsert({
+      where: { senderId: this.sender },
+      create: { senderId: this.sender, state: json },
+      update: { state: json },
     });
   }
-
-  private async ensureItem(shopId: string, name: string) {
-    const normalizedName = normalizeName(name);
-
-    return this.prisma.item.upsert({
-      where: { shopId_normalizedName: { shopId, normalizedName } },
-      create: { shopId, name, normalizedName },
-      update: { name },
-    });
+  async events(): Promise<LedgerEvent[]> {
+    const shop = await this.shop();
+    const where = { shopId: shop.id };
+    const [sales, payments, expenses, entries] = await Promise.all([
+      this.db.sale.findMany({ where, include: { item: true, customer: true } }),
+      this.db.payment.findMany({ where, include: { customer: true } }),
+      this.db.expense.findMany({ where }),
+      this.db.ledgerEntry.findMany({ where, orderBy: { sequence: "asc" } }),
+    ]);
+    if (
+      entries.some((e) => e.currency !== this.currency) ||
+      (this.currency !== "USD" &&
+        (sales.length || payments.length || expenses.length))
+    )
+      throw new TransactionError(
+        "Existing records use a different currency. Keep the original bookkeeping currency.",
+      );
+    const legacy: LedgerEvent[] = [];
+    for (const sale of sales) {
+      let date: string | undefined;
+      try {
+        if (sale.dueDateText)
+          date = dueDate(sale.dueDateText, new Date(sale.createdAt));
+      } catch {
+        /* Preserve unknown legacy dates without inventing one. */
+      }
+      legacy.push({
+        id: "legacy-sale:" + sale.id,
+        legacy: true,
+        revision: 1,
+        currency: "USD",
+        createdAt: sale.createdAt.toISOString(),
+        data: {
+          action: "sold",
+          customer: sale.customer?.name ?? "Walk-in customer",
+          item: sale.item.name,
+          quantityMinor: Math.round(Number(sale.quantity) * 100),
+          total: Math.round(Number(sale.amount) * 100),
+          cashReceived:
+            sale.kind === "cash" ? Math.round(Number(sale.amount) * 100) : 0,
+          changeUsed: 0,
+          cashReturned: 0,
+          dueDate: date,
+        },
+      });
+    }
+    for (const payment of payments)
+      legacy.push({
+        id: "legacy-payment:" + payment.id,
+        legacy: true,
+        revision: 1,
+        currency: "USD",
+        createdAt: payment.createdAt.toISOString(),
+        data: {
+          action: "paid",
+          customer: payment.customer.name,
+          total: Math.round(Number(payment.amount) * 100),
+          cashReceived: Math.round(Number(payment.amount) * 100),
+          changeUsed: 0,
+          cashReturned: 0,
+        },
+      });
+    for (const expense of expenses)
+      legacy.push({
+        id: "legacy-expense:" + expense.id,
+        legacy: true,
+        revision: 1,
+        currency: "USD",
+        createdAt: expense.createdAt.toISOString(),
+        data: {
+          action: "expense",
+          customer: "",
+          description: expense.description,
+          total: Math.round(Number(expense.amount) * 100),
+          cashReceived: 0,
+          changeUsed: 0,
+          cashReturned: 0,
+        },
+      });
+    legacy.sort(
+      (a, b) =>
+        a.createdAt.localeCompare(b.createdAt) ||
+        (a.data.action === "sold"
+          ? -1
+          : b.data.action === "sold"
+            ? 1
+            : a.id.localeCompare(b.id)),
+    );
+    return [
+      ...legacy,
+      ...entries.map((e) => ({
+        id: e.id,
+        data: e.data as unknown as Transaction,
+        revision: e.revision,
+        currency: e.currency,
+        createdAt: e.createdAt.toISOString(),
+        sourceMessageId: e.sourceMessageId ?? undefined,
+      })),
+    ];
   }
-
-  private async sumSales(shopId: string, kind: "cash" | "credit"): Promise<number> {
-    const result = await this.prisma.sale.aggregate({
-      where: { shopId, kind },
-      _sum: { amount: true },
+  async resolveReply(reference: string) {
+    const shop = await this.shop();
+    let row = await this.db.ledgerEntry.findFirst({
+      where: {
+        shopId: shop.id,
+        OR: [
+          { id: reference },
+          { sourceMessageId: reference },
+          { revisions: { some: { sourceMessageId: reference } } },
+        ],
+      },
     });
-
-    return Number(result._sum.amount ?? 0);
+    if (!row) {
+      const receipt = await this.db.inboundMessage.findFirst({
+        where: { senderId: this.sender, outboundMessageId: reference },
+      });
+      const response = receipt?.response as { transactionId?: unknown } | null;
+      if (typeof response?.transactionId === "string")
+        row = await this.db.ledgerEntry.findFirst({
+          where: { shopId: shop.id, id: response.transactionId },
+        });
+    }
+    return row
+      ? {
+          id: row.id,
+          data: row.data as unknown as Transaction,
+          revision: row.revision,
+          currency: row.currency,
+          createdAt: row.createdAt.toISOString(),
+          sourceMessageId: row.sourceMessageId ?? undefined,
+        }
+      : null;
   }
-
-  private async sumPayments(shopId: string): Promise<number> {
-    const result = await this.prisma.payment.aggregate({
-      where: { shopId },
-      _sum: { amount: true },
+  async save(
+    data: Transaction,
+    id: string,
+    sourceMessageId?: string,
+    correction?: Correction,
+  ): Promise<LedgerEvent> {
+    const shop = await this.shop();
+    const events = await this.events();
+    if (correction) correctionAllowed(events, correction, data.customer);
+    const json = JSON.parse(JSON.stringify(data)) as Prisma.InputJsonValue;
+    if (correction) {
+      const old = await this.db.ledgerEntry.findFirstOrThrow({
+        where: { id: correction.id, shopId: shop.id },
+      });
+      const changed = await this.db.ledgerEntry.updateMany({
+        where: { id: old.id, shopId: shop.id, revision: correction.revision },
+        data: { data: json, revision: { increment: 1 } },
+      });
+      if (changed.count !== 1)
+        throw new TransactionError(
+          "That transaction changed. Reply to its current message with Correct.",
+        );
+      await this.db.ledgerRevision.create({
+        data: {
+          entryId: old.id,
+          revision: old.revision + 1,
+          previous: old.data as Prisma.InputJsonValue,
+          replacement: json,
+          sourceMessageId,
+        },
+      });
+      return {
+        id: old.id,
+        data,
+        revision: old.revision + 1,
+        currency: old.currency,
+        createdAt: old.createdAt.toISOString(),
+        sourceMessageId: old.sourceMessageId ?? undefined,
+      };
+    }
+    const row = await this.db.ledgerEntry.create({
+      data: {
+        id,
+        shopId: shop.id,
+        data: json,
+        currency: this.currency,
+        sourceMessageId,
+      },
     });
-
-    return Number(result._sum.amount ?? 0);
+    return {
+      id: row.id,
+      data,
+      revision: row.revision,
+      currency: row.currency,
+      createdAt: row.createdAt.toISOString(),
+      sourceMessageId: row.sourceMessageId ?? undefined,
+    };
   }
-}
-
-function mapSale(sale: {
-  id: string;
-  kind: "cash" | "credit";
-  quantity: unknown;
-  amount: unknown;
-  dueDateText: string | null;
-  createdAt: Date;
-  item: { name: string };
-  customer: { name: string } | null;
-}): Sale {
-  return {
-    id: sale.id,
-    kind: sale.kind,
-    item: sale.item.name,
-    quantity: Number(sale.quantity),
-    amount: Number(sale.amount),
-    customer: sale.customer?.name,
-    dueDate: sale.dueDateText ?? undefined,
-    createdAt: sale.createdAt.toISOString(),
-  };
-}
-
-function mapPayment(payment: {
-  id: string;
-  amount: unknown;
-  createdAt: Date;
-  customer: { name: string };
-}): Payment {
-  return {
-    id: payment.id,
-    customer: payment.customer.name,
-    amount: Number(payment.amount),
-    createdAt: payment.createdAt.toISOString(),
-  };
-}
-
-function normalizeName(value: string): string {
-  return value.trim().toLowerCase();
+  async records() {
+    const transactions = await this.events();
+    const view = replay(transactions);
+    return {
+      transactions,
+      accounts: [...view.accounts.values()].map((a) => ({
+        ...a,
+        chikwereti: a.chikwereti / 100,
+        change: a.change / 100,
+        credits: a.credits
+          .filter((c) => c.remaining)
+          .map((c) => ({ ...c, remaining: c.remaining / 100 })),
+      })),
+      sales: transactions
+        .filter((e) => e.data.action === "sold")
+        .map((e) => ({
+          id: e.id,
+          item: e.data.item,
+          customer: e.data.customer,
+          quantity: (e.data.quantityMinor ?? 100) / 100,
+          amount: e.data.total / 100,
+          kind: view.allocations.get(e.id)!.newDebt ? "credit" : "cash",
+          cashReceived: e.data.cashReceived! / 100,
+          changeUsed: e.data.changeUsed / 100,
+          cashReturned: e.data.cashReturned / 100,
+          createdAt: e.createdAt,
+        })),
+      payments: transactions
+        .filter((e) => e.data.action === "paid")
+        .map((e) => ({
+          id: e.id,
+          customer: e.data.customer,
+          amount: e.data.cashReceived! / 100,
+          appliedToDebt: view.allocations.get(e.id)!.debtSettled / 100,
+          cashReturned: e.data.cashReturned / 100,
+          createdAt: e.createdAt,
+        })),
+      expenses: transactions
+        .filter((e) => e.data.action === "expense")
+        .map((e) => ({
+          id: e.id,
+          description: e.data.description,
+          amount: e.data.total / 100,
+          createdAt: e.createdAt,
+        })),
+    };
+  }
 }
