@@ -2,7 +2,7 @@
 
 Bookkeeping for Zimbabwean vendors. This project implements the agreed conversation flows in [the transaction specification](docs/transaction-specification.md) and [the accepted Makoni walkthrough](docs/accepted-walkthrough.md).
 
-Business contact: **+263 713 982 783**. The backend is locally testable; the live WhatsApp connection and hosted database are not configured by this change. Meta setup is paused while the account is under review.
+Business contact: **+263 71 398 2781**. The backend is locally testable; the live WhatsApp connection and hosted database are not configured by this change. Meta setup is paused while the account is under review.
 
 ## What the bot does
 

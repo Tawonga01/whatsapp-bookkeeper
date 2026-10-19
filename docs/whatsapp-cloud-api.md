@@ -2,7 +2,7 @@
 
 ## Current state
 
-The business contact is **+263 713 982 783** (`263713982783` in international digits). The owner confirmed it is not set up yet. Code is ready for controlled testing; no real message has been sent by this build.
+The business contact is **+263 71 398 2781** (`263713982781` in international digits). The owner confirmed it is not set up yet. Code is ready for controlled testing; no real message has been sent by this build.
 
 The public phone number is **not** `WHATSAPP_PHONE_NUMBER_ID`. Meta supplies a separate numeric ID after the number is added. `WHATSAPP_BUSINESS_NUMBER` is informational only.
 
@@ -10,7 +10,7 @@ The public phone number is **not** `WHATSAPP_PHONE_NUMBER_ID`. Meta supplies a s
 
 1. Open the Meta developer/business dashboards using the business owner's account. Create/select the business portfolio and app with WhatsApp enabled. Review Meta's current business/number eligibility and verification requirements there.
 2. Start with Meta's test number and an approved test recipient. Keep the real business number unchanged until that flow works.
-3. When ready, add and verify +263 713 982 783 with Meta's displayed registration flow. If the number has since been registered in a phone app, check Meta's migration/coexistence eligibility before changing that registration. Do not delete an existing WhatsApp account as a shortcut.
+3. When ready, add and verify +263 71 398 2781 with Meta's displayed registration flow. If the number has since been registered in a phone app, check Meta's migration/coexistence eligibility before changing that registration. Do not delete an existing WhatsApp account as a shortcut.
 4. Put the access token, app secret, phone-number ID and a supported Graph API version into local or host-managed secrets. Choose a separate, random webhook verification token. Do not send these secrets in chat or commit `.env`.
 5. Deploy this backend with a persistent PostgreSQL database and public HTTPS. Use `NODE_ENV=production`, `ENABLE_DEV_API=false` and complete all WhatsApp settings. Configure an appropriate long-lived access token/permissions in Meta, not a temporary development token for production.
 6. Set callback URL `https://<your-backend-host>/whatsapp/webhook` and the matching verify token in Meta. Subscribe the app/business account to incoming `messages` events as required by the dashboard. The Sites landing-page URL is not the Express API host.
