@@ -6,8 +6,28 @@ export type WhatsAppClientConfig = {
   apiVersion?: string;
 };
 export class WhatsAppConfigError extends Error {}
+export function classifyWhatsAppFailure(error: unknown): string {
+  if (!error || typeof error !== 'object') return 'unspecified';
+  const fields = error as Record<string, unknown>;
+  const data = fields.error_data as Record<string, unknown> | undefined;
+  const text = [fields.message, fields.error_user_title, fields.error_user_msg, data?.details]
+    .filter((v): v is string => typeof v === 'string').join(' ').toLowerCase();
+  // Return fixed labels only. Never return provider text, identifiers or credentials.
+  if (/payment|billing|credit line/.test(text)) return 'billing-or-payment';
+  if (/terms|agreement|accept.*policy/.test(text)) return 'terms-acceptance';
+  if (/allow.?list|allowed list|recipient.*list/.test(text)) return 'recipient-allowlist';
+  if (/on behalf|whatsapp business account|waba/.test(text) && /permission|access/.test(text)) return 'whatsapp-account-access';
+  if (/whatsapp_business_messaging/.test(text)) return 'messaging-permission';
+  if (/whatsapp_business_management/.test(text)) return 'management-permission';
+  if (/advanced access|app review/.test(text)) return 'app-review-access';
+  if (/not registered|register.*phone/.test(text)) return 'phone-registration';
+  if (/expired|invalid.*token|token.*invalid/.test(text)) return 'token-invalid-or-expired';
+  if (/permission|authoriz|access denied/.test(text)) return 'permission-denied';
+  if (/restrict|disabled|blocked/.test(text)) return 'account-restricted';
+  return 'unspecified';
+}
 export class WhatsAppDeliveryError extends Error {
-  constructor(readonly status: number, readonly code?: number, readonly subcode?: number) {
+  constructor(readonly status: number, readonly code?: number, readonly subcode?: number, readonly reason = 'unspecified') {
     super(`WhatsApp send failed (HTTP ${status}).`);
     this.name = 'WhatsAppDeliveryError';
   }
@@ -96,7 +116,7 @@ export class WhatsAppClient {
       // Never retain/log the raw response: it may contain personal or credential data.
       const failure = await result.json().catch(() => null) as { error?: { code?: unknown; error_subcode?: unknown } } | null;
       const numeric = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined;
-      throw new WhatsAppDeliveryError(result.status, numeric(failure?.error?.code), numeric(failure?.error?.error_subcode));
+      throw new WhatsAppDeliveryError(result.status, numeric(failure?.error?.code), numeric(failure?.error?.error_subcode), classifyWhatsAppFailure(failure?.error));
     }
     const body = (await result.json()) as {
       messages?: Array<{ id?: unknown }>;

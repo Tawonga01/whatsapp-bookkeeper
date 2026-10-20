@@ -1,6 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { WhatsAppClient } from "../src/whatsapp/client.js";
+import { WhatsAppClient, classifyWhatsAppFailure, WhatsAppDeliveryError } from "../src/whatsapp/client.js";
+test('provider diagnostic classification never returns arbitrary response details', async (t) => {
+  assert.equal(classifyWhatsAppFailure({message:'Private name EAA-secret +263123'}), 'unspecified');
+  assert.equal(classifyWhatsAppFailure({message:'No permission to send on behalf of this WhatsApp Business Account EAA-secret'}), 'whatsapp-account-access');
+  assert.equal(classifyWhatsAppFailure({error_data:{details:'Accept the terms first'}}), 'terms-acceptance');
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({error:{code:10,message:'Application does not have permission for this action EAA-secret',error_data:{details:'private customer'}}}), {status:400}));
+  const client = new WhatsAppClient({accessToken:'EAA-secret',phoneNumberId:'123',apiVersion:'v26.0'});
+  await assert.rejects(()=>client.sendResponse('263123',{text:'private customer'}), error => {
+    assert.ok(error instanceof WhatsAppDeliveryError);
+    assert.equal(error.reason,'permission-denied');
+    assert.equal(error.code,10);
+    assert.equal(JSON.stringify(error).includes('EAA-secret'),false);
+    assert.equal(JSON.stringify(error).includes('private customer'),false);
+    return true;
+  });
+});
 test("outbound list, confirmation buttons and plain text match Cloud API shape", async (t) => {
   const sent: any[] = [];
   t.mock.method(
