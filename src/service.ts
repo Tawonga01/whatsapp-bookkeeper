@@ -4,6 +4,7 @@ import { BookkeepingStore } from "./domain/store.js";
 import type { BotResponse } from "./domain/types.js";
 import type { IncomingMessage } from "./whatsapp/webhook.js";
 import type { WhatsAppClient } from "./whatsapp/client.js";
+import { WhatsAppDeliveryError } from "./whatsapp/client.js";
 import type { MessageContext } from "./domain/transactions.js";
 import { randomUUID } from "node:crypto";
 
@@ -114,7 +115,7 @@ export class AccountingService {
               outboundMessageId,
             },
           });
-        } catch {
+        } catch (error) {
           await tx.inboundMessage.update({
             where: { id: row.id },
             data: {
@@ -125,7 +126,9 @@ export class AccountingService {
             },
           });
           console.warn("WhatsApp response delivery deferred", {
-            messageId: row.id,
+            ...(error instanceof WhatsAppDeliveryError
+              ? { httpStatus: error.status, apiCode: error.code, apiSubcode: error.subcode }
+              : { category: error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'transport-or-storage' }),
           });
         }
       },

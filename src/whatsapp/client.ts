@@ -6,6 +6,12 @@ export type WhatsAppClientConfig = {
   apiVersion?: string;
 };
 export class WhatsAppConfigError extends Error {}
+export class WhatsAppDeliveryError extends Error {
+  constructor(readonly status: number, readonly code?: number, readonly subcode?: number) {
+    super(`WhatsApp send failed (HTTP ${status}).`);
+    this.name = 'WhatsAppDeliveryError';
+  }
+}
 export class WhatsAppClient {
   constructor(private readonly config: WhatsAppClientConfig) {}
   isConfigured(): boolean {
@@ -86,8 +92,12 @@ export class WhatsAppClient {
         signal: AbortSignal.timeout(15_000),
       },
     );
-    if (!result.ok)
-      throw new Error(`WhatsApp send failed (HTTP ${result.status}).`);
+    if (!result.ok) {
+      // Never retain/log the raw response: it may contain personal or credential data.
+      const failure = await result.json().catch(() => null) as { error?: { code?: unknown; error_subcode?: unknown } } | null;
+      const numeric = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined;
+      throw new WhatsAppDeliveryError(result.status, numeric(failure?.error?.code), numeric(failure?.error?.error_subcode));
+    }
     const body = (await result.json()) as {
       messages?: Array<{ id?: unknown }>;
     };
