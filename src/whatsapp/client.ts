@@ -6,6 +6,14 @@ export type WhatsAppClientConfig = {
   apiVersion?: string;
 };
 export class WhatsAppConfigError extends Error {}
+export function safeProviderExplanation(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  // Diagnostic vocabulary only: unknown words, numbers, URLs and identifiers never leave memory.
+  const allowed = new Set(('a an the this that these those to of for from on in with without and or is are was were be been has have had not no cannot can could does do did must should please you your we our it its app application user system viewer business whatsapp messaging message messages paid payment billing account accounts phone number token access permission permissions granted grant removed required requires missing invalid expired expired session object objects provided provide action request api endpoint allowed allow denied enabled disabled registered registration register accepted accept terms service policy policies capability capabilities eligible eligibility supported unsupported available unavailable development production live mode granular behalf send sending receive receiving manage management use using feature features restricted restriction restrictions temporarily blocked due security verification verified unverified credit line limit exceeded contact support error failed failure valid status scope scopes authentication authorization authorized unauthorized recipient test only needs need expired debug'.split(' ')));
+  return value.slice(0, 1500).replace(/https?:\/\/\S+|[A-Za-z0-9_.%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]+|\S*[0-9]\S*/g, '[redacted]')
+    .replace(/[A-Za-z_]+/g, word => word === 'redacted' || allowed.has(word.toLowerCase()) ? word : '[redacted]')
+    .replace(/(?:\[redacted\][\s,;:]*){2,}/g, '[redacted] ').slice(0, 600);
+}
 export function classifyWhatsAppFailure(error: unknown): string {
   if (!error || typeof error !== 'object') return 'unspecified';
   const fields = error as Record<string, unknown>;
@@ -27,7 +35,7 @@ export function classifyWhatsAppFailure(error: unknown): string {
   return 'unspecified';
 }
 export class WhatsAppDeliveryError extends Error {
-  constructor(readonly status: number, readonly code?: number, readonly subcode?: number, readonly reason = 'unspecified') {
+  constructor(readonly status: number, readonly code?: number, readonly subcode?: number, readonly reason = 'unspecified', readonly explanation?: { message?: string; details?: string; title?: string }) {
     super(`WhatsApp send failed (HTTP ${status}).`);
     this.name = 'WhatsAppDeliveryError';
   }
@@ -114,9 +122,13 @@ export class WhatsAppClient {
     );
     if (!result.ok) {
       // Never retain/log the raw response: it may contain personal or credential data.
-      const failure = await result.json().catch(() => null) as { error?: { code?: unknown; error_subcode?: unknown } } | null;
+      const failure = await result.json().catch(() => null) as { error?: { code?: unknown; error_subcode?: unknown; message?: unknown; error_user_title?: unknown; error_data?: { details?: unknown } } } | null;
       const numeric = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined;
-      throw new WhatsAppDeliveryError(result.status, numeric(failure?.error?.code), numeric(failure?.error?.error_subcode), classifyWhatsAppFailure(failure?.error));
+      throw new WhatsAppDeliveryError(result.status, numeric(failure?.error?.code), numeric(failure?.error?.error_subcode), classifyWhatsAppFailure(failure?.error), {
+        message: safeProviderExplanation(failure?.error?.message),
+        details: safeProviderExplanation(failure?.error?.error_data?.details),
+        title: safeProviderExplanation(failure?.error?.error_user_title),
+      });
     }
     const body = (await result.json()) as {
       messages?: Array<{ id?: unknown }>;

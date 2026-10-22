@@ -127,7 +127,7 @@ export class AccountingService {
           });
           console.warn("WhatsApp response delivery deferred", {
             ...(error instanceof WhatsAppDeliveryError
-              ? { httpStatus: error.status, apiCode: error.code, apiSubcode: error.subcode, reason: error.reason }
+              ? { httpStatus: error.status, apiCode: error.code, apiSubcode: error.subcode, reason: error.reason, explanation: error.explanation }
               : { category: error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'transport-or-storage' }),
           });
         }

@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { WhatsAppClient, classifyWhatsAppFailure, WhatsAppDeliveryError } from "../src/whatsapp/client.js";
+import { WhatsAppClient, classifyWhatsAppFailure, WhatsAppDeliveryError, safeProviderExplanation } from "../src/whatsapp/client.js";
+test('provider explanations preserve diagnostic wording but redact identifiers and unknown text', () => {
+  assert.equal(safeProviderExplanation('Viewer cannot access the provided Paid Message Account'), 'Viewer cannot access the provided Paid Message Account');
+  const text = safeProviderExplanation('Permission denied for Tawonga Makoni EAAsecret123 263713982781 person@example.com https://secret.test/token')!;
+  for (const secret of ['Tawonga','Makoni','EAAsecret123','263713982781','person@example.com','secret.test']) assert.equal(text.includes(secret),false);
+  assert.equal(safeProviderExplanation(null),undefined);
+});
 test('provider diagnostic classification never returns arbitrary response details', async (t) => {
   assert.equal(classifyWhatsAppFailure({message:'Private name EAA-secret +263123'}), 'unspecified');
   assert.equal(classifyWhatsAppFailure({message:'No permission to send on behalf of this WhatsApp Business Account EAA-secret'}), 'whatsapp-account-access');
