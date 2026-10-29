@@ -54,6 +54,7 @@ export type ChatState = {
   version: 2;
   phase:
     | "cash"
+    | "customer"
     | "useChange"
     | "handback"
     | "due"
@@ -106,6 +107,12 @@ export function saleValue(quantityMinor: number, unitPrice: number) {
   return Number(result);
 }
 export function parseTransaction(input: string): Transaction | null {
+  // An omitted name is valid for sales only; never use a shared walk-in account.
+  if (/^sold\s+-\s+/i.test(input.trim())) {
+    const sale = parseTransaction('Unnamed sale - ' + input.trim());
+    if (sale) sale.customer = '';
+    return sale;
+  }
   const parts = input
     .trim()
     .split(/\s+-\s+/)
@@ -280,9 +287,11 @@ export function replay(events: LedgerEvent[]) {
   for (const event of events) {
     if (event.data.action === "expense") continue;
     const key = customerKey(event.data.customer);
-    const account = accounts.get(key) ?? newAccount(event.data.customer);
+    const account = (key ? accounts.get(key) : undefined) ?? newAccount(event.data.customer);
     allocations.set(event.id, applyTransaction(account, event.data, event.id));
-    accounts.set(key, account);
+    if (key) accounts.set(key, account);
+    else if (account.chikwereti || account.change)
+      throw new TransactionError('A customer name is required for CHIKWERETI or outstanding CHANGE.');
   }
   return { accounts, allocations };
 }
@@ -303,7 +312,7 @@ export function correctionAllowed(
   const names = new Set([
     customerKey(correction.customer),
     customerKey(customer),
-  ]);
+  ].filter(Boolean));
   if (
     events
       .slice(index + 1)

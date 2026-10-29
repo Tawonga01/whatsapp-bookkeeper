@@ -77,6 +77,51 @@ function setup() {
     },
   };
 }
+test('unnamed cash sales remain independent and are included in totals', async () => {
+  const {send,store} = setup();
+  assert.match((await send('Sold - Tomatoes - 3x1 - Cash 3 dollars')).text,/Cash sale — Tomatoes/);
+  assert.equal(store.entries.length,0);
+  await send('Confirm');
+  await send('cash tomatoes 2 2'); await send('Confirm');
+  assert.equal(store.entries.length,2);
+  assert.equal(replay(store.entries).accounts.size,0);
+  assert.match((await send('summary')).text,/Sales: \$5.00/);
+  await send('Correct',store.entries[0].id);
+  await send('Sold - Tomatoes - 4x1 - Cash 4 dollars');
+  await send('Confirm');
+  assert.equal(store.entries.length,2);
+  assert.equal(store.entries[0].data.total,400);
+});
+test('unnamed debt asks for a name before date; existing customer balances still apply', async () => {
+  const {send,store,account} = setup();
+  assert.match((await send('Sold - Soap - 6x1.70 - Cash 6 dollars')).text,/Who is the customer/);
+  await send('Confirm'); assert.equal(store.entries.length,0);
+  assert.match((await send('Makoni')).text,/When will Makoni pay/);
+  await send('Sunday'); await send('Confirm');
+  assert.equal(account()!.chikwereti,420);
+  await send('Sold - Sweets - 3x1 - Cash 2 dollars');
+  await send('Makoni'); await send('Skip'); await send('Confirm');
+  assert.equal(account()!.chikwereti,520);
+});
+test('unnamed excess requires full handback or a named CHANGE account', async () => {
+  const {send,store} = setup();
+  assert.match((await send('Sold - Soap - 6x1.70 - Cash 15 dollars')).text,/Did you give it back/);
+  assert.match((await send('Yes')).text,/CHANGE: \*\$0.00\*/);
+  await send('Confirm');
+  assert.equal(replay(store.entries).accounts.size,0);
+  await send('Sold - Soap - 6x1.70 - Cash 15 dollars');
+  assert.match((await send('No')).text,/Who is the customer/);
+  assert.equal(store.entries.length,1);
+  assert.match((await send('Makoni')).text,/Did you give it back/);
+  await send('No'); await send('Confirm');
+  assert.equal(replay(store.entries).accounts.get('makoni')!.change,480);
+  await send('Sold - Sweets - 3x1 - Cash 3 dollars'); await send('Confirm');
+  assert.equal(replay(store.entries).accounts.get('makoni')!.change,480);
+  await send('Sold - Sweets - 3x1');
+  assert.match((await send('3 dollars')).text,/Cash sale/);
+  await send('Cancel');
+  assert.equal(store.entries.length,3);
+});
 test("the accepted Makoni walkthrough: corrected drafts, dates, repayment and full handbacks", async () => {
   const { send, store, account } = setup();
   let r = await send("Makoni - Sold - Soap - 6x1.70 - Cash 6 dollars");

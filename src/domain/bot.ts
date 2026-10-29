@@ -79,6 +79,7 @@ export class BookkeepingBot {
         "MUSIKA ACCOUNTANT",
         "Enter a transaction, for example:",
         "Makoni - Sold - Soap - 6x1.70 - Cash 6 dollars",
+        "Sold - Tomatoes - 3x1 - Cash 3 dollars (cash sale without a name)",
         "Makoni - Paid - 5 dollars",
         "Makoni - Returned - 3.60 dollars",
         "SUMMARY · DEBTORS · CHANGE · DUE TODAY · OVERDUE",
@@ -92,6 +93,10 @@ export class BookkeepingBot {
         text: "Please enter the transaction again with the correct details.",
       };
     const draft = state.draft!;
+    if (state.phase === "customer")
+      return { text: draft.cashReceived! < draft.total
+        ? 'Who is the customer? A name is needed to track CHIKWERETI.'
+        : 'Who is the customer? A name is needed to track the CHANGE you kept.' };
     if (state.phase === "cash")
       return {
         text:
@@ -134,7 +139,7 @@ export class BookkeepingBot {
         buttons: this.buttons(state, [["skip", "Skip"]]),
       };
     const lines = [
-      `${draft.customer || "Business"} — ${draft.action === "sold" ? draft.item : draft.action === "paid" ? "Payment" : draft.action === "returned" ? "CHANGE returned" : "Expense"}`,
+      `${draft.customer || (draft.action === "sold" ? "Cash sale" : "Business")} — ${draft.action === "sold" ? draft.item : draft.action === "paid" ? "Payment" : draft.action === "returned" ? "CHANGE returned" : "Expense"}`,
     ];
     if (draft.action === "sold")
       lines.push(
@@ -206,6 +211,11 @@ export class BookkeepingBot {
       return this.response(state, events);
     }
     const base = replay(events.filter((e) => e.id !== state.correction?.id));
+    if (draft.action === "sold" && !draft.customer &&
+        (draft.cashReceived! < draft.total || (after === "handback" && draft.cashReceived! - draft.cashReturned > draft.total))) {
+      await this.phase(state, "customer");
+      return this.response(state, events);
+    }
     const account =
       base.accounts.get(customerKey(draft.customer)) ??
       newAccount(draft.customer);
@@ -280,7 +290,7 @@ export class BookkeepingBot {
       if (command.type === "sale")
         return {
           action: "sold",
-          customer: command.draft.customer ?? "Walk-in customer",
+          customer: command.draft.customer ?? "",
           item: command.draft.item,
           quantityMinor: amount(String(command.draft.quantity)),
           total: amount(String(command.draft.amount)),
@@ -471,6 +481,15 @@ export class BookkeepingBot {
         return this.response(state, events);
       }
       if (state && state.phase !== "reenter") {
+        if (state.phase === "customer") {
+          if (!text || text.length > 100 || /[\r\n]/.test(text) || text.includes(' - ') || /^(confirm|comfirm|yes|skip|enter date)$/i.test(text))
+            return { text: 'Enter the customer name only, on one line (at most 100 characters), or Cancel.' };
+          if (state.correction) correctionAllowed(events, state.correction, text);
+          state.draft!.customer = text;
+          state.draft!.changeUsed = 0;
+          state.draft!.cashReturned = 0;
+          return await this.next(state, events);
+        }
         if (state.phase === "cash") {
           const value = amount(
             text,
@@ -532,6 +551,9 @@ export class BookkeepingBot {
             };
           }
           preview(events, state.draft!, state.entryId, state.correction);
+          if (state.draft!.action === 'sold' && !state.draft!.customer &&
+              state.draft!.cashReceived! - state.draft!.cashReturned !== state.draft!.total)
+            throw new TransactionError('A customer name is required for CHIKWERETI or outstanding CHANGE.');
           if (
             state.correction?.retainedDueDate &&
             !state.draft!.dueDate &&
